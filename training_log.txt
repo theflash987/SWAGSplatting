@@ -1,0 +1,3 @@
+pana /home/ci21041/final_project/project_intern/output/7cc93853-e standard
+japan /home/ci21041/final_project/project_intern/output/a8afb7ad-f standard
+kwaj /home/ci21041/final_project/project_intern/output/cc4376f2-1 standard

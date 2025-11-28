@@ -1,0 +1,31 @@
+name: UW-GS
+channels:
+  - pytorch
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.8
+  - pip
+  - numpy=1.21.6
+  - pillow=8.2.0
+  - tqdm
+  - typing_extensions
+  - certifi
+  - freetype
+  - lcms2
+  - jpeg
+  - libpng
+  - sqlite
+  - libtiff
+  - libxml2
+  - zlib
+  - zstd
+  - xz
+  - blas=*=openblas
+  - openblas
+  - cudatoolkit=11.6
+  - pytorch=1.12.1
+  - torchvision=0.13.1
+  - torchaudio=0.12.1
+  - pip:
+    - submodules/diff-gaussian-rasterization
