@@ -44,11 +44,10 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     scene = Scene(dataset, gaussians)
     gaussians.training_setup(opt)
     
-    # PSNR 微调阶段控制
-    psnr_finetune_from = getattr(opt, 'psnr_finetune_from', None)
+    stage = getattr(opt, 'stage', None)
     finetune_entered = False
     
-    # 根据source_path自动设置语义分割文件路径
+    # Semantic source path
     seg_json_path = os.path.join(dataset.source_path, "output.json")
     seg_data = load_segmentation_and_precompute_embeddings(seg_json_path)
 
@@ -117,7 +116,6 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         
         screenspace_points = render_pkg["viewspace_points"]
         
-        # 将屏幕空间坐标转换为图像像素坐标
         H, W = viewpoint_cam.image_height, viewpoint_cam.image_width
         visible_screenspace = screenspace_points[visibility_filter]
 
@@ -154,7 +152,6 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         Ll1_depth = torch.mean(l1_loss(mask * depth, mask * or_depth))
         Ll1 = l1_loss(mask * image, mask * gt_image)
         
-        # 添加L2损失以提升PSNR
         Ll2 = l2_loss(mask * image, mask * gt_image)
 
         # Edge smoothness loss
@@ -178,21 +175,21 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             loss = 0.1 * Ll1_depth + l_d + l_g
         else:
             l1_weight = 0.7 + 0.5 * (iteration / opt.iterations)
-            # 判断是否进入 PSNR 微调阶段
-            is_finetune = (psnr_finetune_from is not None) and (iteration >= psnr_finetune_from)
+            # Second stage optimisation
+            is_finetune = (stage is not None) and (iteration >= stage)
             
-            # 首次进入微调阶段：冻结几何参数学习率，解冻 MLP 头
+            # Freeze geometry lr to stable the basic property, unfreeze MLP head
             if is_finetune and not finetune_entered:
-                # 冻结几何相关参数（仅将 lr 置 0，最小侵入式）
+                # Freeze geometry-related parameters (set lr to 0, minimal intrusion)
                 for group in gaussians.optimizer.param_groups:
                     if group.get("name") in ["xyz", "scaling", "rotation"]:
                         group['lr'] = 0.0
-                # 解冻 MLP 头，确保后期可拟合颜色残差
+                # Unfreeze MLP head to allow fitting color residuals later
                 gaussians.mlp_head.requires_grad_(True)
                 finetune_entered = True
                 print(f"[PSNR Finetune] Entered at iter {iteration}. Frozen geometry lrs, unfroze MLP head.")
 
-            # 权重日程（微调阶段强调 L2，衰减结构/正则/深度/语义）
+            # Emphasize L2 during finetuning, decay structure/regularization/depth/semantic
             if is_finetune:
                 l2_weight = 0.9
                 lambda_dssim_eff = 0.0
@@ -200,9 +197,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                 depth_w = 0.0
                 semantic_weight = 0.0
             else:
-                # ---------------------------------------
                 l2_weight = 0.1 * (iteration / opt.iterations)
-                # ---------------------------------------
                 lambda_dssim_eff = opt.lambda_dssim
                 lambda_smooth_eff = lambda_smooth
                 depth_w = 0.1
@@ -211,14 +206,6 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                 semantic_weight = max(0.01, 0.3 * (1.0 - iteration / opt.iterations))
 
             if weight == 1:
-                # loss = torch.mean((1.0 - opt.lambda_dssim) * Ll1) + opt.lambda_dssim * (1.0 - ssim(mask * image, mask * gt_image)) + l_d + l_g + 0.1 * Ll1_depth + lambda_smooth * smooth_loss + 0.3 * semantic_loss
-                # PSNR优化：动态权重调整
-                
-                # semantic_weight = max(0.05, 0.3 * (1.0 - iteration / opt.iterations))
-                # loss = torch.mean(l1_weight * (1.0 - opt.lambda_dssim) * Ll1) + opt.lambda_dssim * (1.0 - ssim(mask * image, mask * gt_image)) + l_d + l_g + 0.1 * Ll1_depth + lambda_smooth * smooth_loss + semantic_weight * semantic_loss + l2_weight * torch.mean(Ll2)
-                # if not is_finetune:
-                #     semantic_weight = max(0.01, 0.3 * (1.0 - iteration / opt.iterations))
-                # 组合损失（微调阶段使用未掩码 L2，且弱化/关闭其他项）
                 l2_term = torch.mean(Ll2)
                 loss = torch.mean(l1_weight * (1.0 - lambda_dssim_eff) * Ll1) \
                        + lambda_dssim_eff * (1.0 - ssim(mask * image, mask * gt_image)) \
@@ -228,16 +215,12 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                        + l2_weight * l2_term \
                        + semantic_weight * semantic_loss
             else:
-                # loss = torch.mean((1.0 - opt.lambda_dssim) * Ll1) + opt.lambda_dssim * (1.0 - ssim(mask * image, mask * gt_image)) + l_d + l_g + 0.1 * Ll1_depth + lambda_smooth * smooth_loss
-                # loss = torch.mean(l1_weight * (1.0 - opt.lambda_dssim) * Ll1) + opt.lambda_dssim * (1.0 - ssim(mask * image, mask * gt_image)) + l_d + l_g + 0.1 * Ll1_depth + lambda_smooth * smooth_loss + l2_weight * torch.mean(Ll2)
-                l2_term = torch.mean(Ll2)
                 loss = torch.mean(l1_weight * (1.0 - lambda_dssim_eff) * Ll1) \
                        + lambda_dssim_eff * (1.0 - ssim(mask * image, mask * gt_image)) \
                        + l_d + l_g \
                        + depth_w * Ll1_depth \
                        + lambda_smooth_eff * smooth_loss \
                        + l2_weight * l2_term
-                    #    + semantic_weight * semantic_loss \
 
                 if hasattr(opt, 'adaptive') and opt.adaptive:
                     # loss = (weight * loss) / 2 + (opt.alpha * log_uncertainty) / 2
@@ -372,7 +355,7 @@ if __name__ == "__main__":
     parser.add_argument('--port', type=int, default=6009)
     parser.add_argument('--debug_from', type=int, default=-1)
     parser.add_argument('--detect_anomaly', action='store_true', default=False)
-    parser.add_argument('--psnr_finetune_from', type=int, default=None, help='start iter for PSNR-oriented finetune; None to disable')
+    parser.add_argument('--stage', type=int, default=None, help='Second stage of the optimisation')
     parser.add_argument("--test_iterations", nargs="+", type=int, default=[7_000, 12_000, 15_000])
     parser.add_argument("--save_iterations", nargs="+", type=int, default=[7_000, 12_000, 15_000])
     parser.add_argument("--quiet", action="store_true")
@@ -399,13 +382,13 @@ if __name__ == "__main__":
     model_args.adaptive = args.adaptive
     model_args.frame = args.frame
     model_args.alpha = args.alpha
-    model_args.psnr_finetune_from = args.psnr_finetune_from
+    model_args.stage = args.stage
 
     opt = op.extract(args)
     opt.adaptive = args.adaptive
     opt.alpha = args.alpha
     opt.frame = args.frame
-    opt.psnr_finetune_from = args.psnr_finetune_from
+    opt.stage = args.stage
     
     training(model_args, opt, pp.extract(args), args.test_iterations, args.save_iterations, args.checkpoint_iterations, args.start_checkpoint, args.debug_from)
 
