@@ -359,7 +359,44 @@ class GaussianModel:
 
         self._semantic_feature = self._semantic_feature[valid_points_mask]
 
+    def prune_gaussians(self, percent, import_score: torch.Tensor, errors: torch.Tensor):
 
+        N = import_score.shape[0]
+        K = int(percent * N)
+
+        _, prune_idx = torch.topk(import_score.view(-1), K, largest=False)
+
+        _, src_idx = torch.topk(errors.view(-1), K, largest=True)
+
+        with torch.no_grad():
+            self._xyz[prune_idx] = self._xyz[src_idx]
+            self._features_dc[prune_idx] = self._features_dc[src_idx]
+            self._features_rest[prune_idx] = self._features_rest[src_idx]
+            self._opacity[prune_idx] = self._opacity[src_idx]
+            self._scaling[prune_idx] = self._scaling[src_idx]
+            self._rotation[prune_idx] = self._rotation[src_idx]
+            self._semantic_feature[prune_idx] = self._semantic_feature[src_idx]
+    def prune_gaussians_s(self, percent, import_score: list):
+        sorted_tensor, _ = torch.sort(import_score, dim=0)
+        index_nth_percentile = int(percent * (sorted_tensor.shape[0] - 1))
+        value_nth_percentile = sorted_tensor[index_nth_percentile]
+        prune_mask = (import_score <= value_nth_percentile).squeeze()
+
+        sorted_tensor_e, _ = torch.sort(import_score, dim=0)
+        index_nth_percentile_e = int((1 - percent) * (sorted_tensor_e.shape[0] - 1))
+        value_nth_percentile_e = sorted_tensor_e[index_nth_percentile_e]
+        selected_pts_mask = (import_score >= value_nth_percentile_e).squeeze()
+
+        new_xyz = self._xyz[selected_pts_mask]
+        new_features_dc = self._features_dc[selected_pts_mask]
+        new_features_rest = self._features_rest[selected_pts_mask]
+        new_opacities = self._opacity[selected_pts_mask]
+        new_scaling = self._scaling[selected_pts_mask]
+        new_rotation = self._rotation[selected_pts_mask]
+        new_semantic = self._semantic_feature[selected_pts_mask]
+
+        self.prune_points(prune_mask)
+        self.densification_postfix(new_xyz, new_features_dc, new_features_rest, new_opacities, new_scaling, new_rotation, new_semantic)
     def cat_tensors_to_optimizer(self, tensors_dict):
         optimizable_tensors = {}
         for group in self.optimizer.param_groups:

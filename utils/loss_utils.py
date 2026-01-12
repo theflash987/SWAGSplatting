@@ -94,10 +94,10 @@ class Channel_wise_depth_consistency(nn.Module):
         TB = -torch.log(Transmitance_B)
 
         depth_D = TD / (beta_d + 1e-5)
-        depth_D = (depth_D - depth_D.min())/(depth_D.max() - depth_D.min())
+        depth_D = (depth_D - depth_D.min())/(depth_D.max() - depth_D.min() + 1e-8)
         depth_B = TB / (beta_b + 1e-5)
-        depth_B = (depth_B - depth_B.min()) / (depth_B.max() - depth_B.min())
-        depth = (depth - depth.min()) / (depth.max() - depth.min())
+        depth_B = (depth_B - depth_B.min()) / (depth_B.max() - depth_B.min() + 1e-8)
+        depth = (depth - depth.min()) / (depth.max() - depth.min() + 1e-8)
         depth = depth.repeat(1, 3)
 
         loss_d = torch.mean(l2_loss(depth_D, depth))

@@ -18,6 +18,7 @@ import numpy as np
 from utils.loss_utils import l1_loss, l2_loss, ssim, Channel_wise_depth_consistency, GrayWorldAssumptionLoss, EdgeSmoothnessLoss
 from utils.weight_utils_quick import robust_mask
 from gaussian_renderer import render, network_gui
+from gaussian_renderer_or import render_or
 import sys
 from scene import Scene, GaussianModel
 from utils.general_utils import safe_state
@@ -36,6 +37,51 @@ try:
 except ImportError:
     TENSORBOARD_FOUND = False
 
+def score_func(view, gaussians, pipeline, background, scores, gt, errors):
+
+    img_scores = torch.zeros_like(scores)
+    img_scores.requires_grad = True
+
+    img_errors = torch.zeros_like(errors)
+    img_errors.requires_grad = True
+
+    image = render(view, gaussians, pipeline, background,
+                   scores=img_scores)['render']
+
+    image.sum().backward()
+    scores += img_scores.grad
+
+    image = render(view, gaussians, pipeline, background,
+                   scores=img_errors)['render']
+    per_view_loss = l1_loss(gt, image)
+    per_view_loss.mean().backward()
+    errors += img_errors.grad
+    
+def prune(scene, gaussians, pipe, background, prune_ratio):
+
+    iter_start = torch.cuda.Event(enable_timing = True)
+    iter_end = torch.cuda.Event(enable_timing = True)
+    torch.cuda.reset_peak_memory_stats()
+
+    iter_start.record()
+
+    with torch.enable_grad():
+        pbar = tqdm(
+            total=len(scene.getTrainCameras()),
+            desc='Computing Pruning Scores')
+        scores = torch.zeros_like(gaussians.get_opacity)
+        errors = torch.zeros_like(gaussians.get_opacity)
+        for view in scene.getTrainCameras():
+            gt = view.original_image.cuda()
+            score_func(view, gaussians, pipe, background,
+                scores, gt, errors)
+            pbar.update(1)
+        pbar.close()
+
+    gaussians.prune_gaussians(prune_ratio, scores, errors)
+    gaussians.optimizer.zero_grad(set_to_none=True)
+    gaussians.optimizer_net.zero_grad(set_to_none=True)
+    iter_end.record()
 
 def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoint_iterations, checkpoint, debug_from):
     first_iter = 0
@@ -129,6 +175,14 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             "backscattering"], render_pkg["attn"], render_pkg["bs"]
         attn = torch.mean(attn, dim=0)
         bs = torch.mean(bs, dim=0)
+
+        # Add hinge loss to the colour medium parameters
+        m = 1e-3
+        lambda_order = 1e-3
+        order_attn = torch.relu(attn[..., 1] - attn[..., 0] + m) + torch.relu(attn[..., 2] - attn[..., 1] + m)
+        order_bs = torch.relu(bs[..., 1] - bs[..., 0] + m) + torch.relu(bs[..., 2] - bs[..., 1] + m)
+        beta_order_loss = (order_attn.mean() + order_bs.mean()) * 0.5
+
         L_da = Channel_wise_depth_consistency()
         l_d = L_da(t_d, attn, depths.detach(), t_b, bs)
 
@@ -172,7 +226,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         if iteration >= opt.mlp_gradient_stop:
             gaussians.mlp_head.requires_grad_(False)
         if iteration <= opt.densify_from_iter:
-            loss = 0.1 * Ll1_depth + l_d + l_g
+            loss = 0.5*(torch.mean((1.0 - opt.lambda_dssim) * Ll1) + opt.lambda_dssim * (1.0 - ssim(image, gt_image))) + Ll1_depth + l_d + l_g
         else:
             l1_weight = 0.7 + 0.5 * (iteration / opt.iterations)
             # Second stage optimisation
@@ -205,22 +259,24 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             if not is_finetune:
                 semantic_weight = max(0.01, 0.3 * (1.0 - iteration / opt.iterations))
 
+            l2_term = torch.mean(Ll2)
             if weight == 1:
-                l2_term = torch.mean(Ll2)
                 loss = torch.mean(l1_weight * (1.0 - lambda_dssim_eff) * Ll1) \
                        + lambda_dssim_eff * (1.0 - ssim(mask * image, mask * gt_image)) \
                        + l_d + l_g \
                        + depth_w * Ll1_depth \
                        + lambda_smooth_eff * smooth_loss \
                        + l2_weight * l2_term \
-                       + semantic_weight * semantic_loss
+                       + semantic_weight * semantic_loss \
+                       + lambda_order * beta_order_loss
             else:
                 loss = torch.mean(l1_weight * (1.0 - lambda_dssim_eff) * Ll1) \
                        + lambda_dssim_eff * (1.0 - ssim(mask * image, mask * gt_image)) \
                        + l_d + l_g \
                        + depth_w * Ll1_depth \
                        + lambda_smooth_eff * smooth_loss \
-                       + l2_weight * l2_term
+                       + l2_weight * l2_term \
+                       + lambda_order * beta_order_loss
 
                 if hasattr(opt, 'adaptive') and opt.adaptive:
                     # loss = (weight * loss) / 2 + (opt.alpha * log_uncertainty) / 2
@@ -236,7 +292,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             # Progress bar
             ema_loss_for_log = 0.4 * loss.item() + 0.6 * ema_loss_for_log
             if iteration % 10 == 0:
-                progress_bar.set_postfix({"Loss": f"{ema_loss_for_log:.{7}f}"})
+                progress_bar.set_postfix({"Loss": f"{ema_loss_for_log:.{7}f}", "N_GS": f"{gaussians.get_xyz.shape[0]}"})
                 progress_bar.update(10)
             if iteration == opt.iterations:
                 progress_bar.close()
@@ -255,7 +311,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
 
             # Log and save
             training_report(tb_writer, iteration, Ll1, loss, l1_loss, iter_start.elapsed_time(iter_end),
-                            testing_iterations, scene, render, (pipe, background))
+                            testing_iterations, scene, render_or, (pipe, background))
             
             if (iteration in saving_iterations):
                 print("\n[ITER {}] Saving Gaussians".format(iteration))
@@ -273,6 +329,8 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                 if iteration % opt.opacity_reset_interval == 0 or (
                         dataset.white_background and iteration == opt.densify_from_iter):
                     gaussians.reset_opacity()
+            elif iteration % 3000 == 0 and iteration < 15000:
+                prune(scene, gaussians, pipe, background, 0.1)
 
             if (iteration in checkpoint_iterations):
                 print("\n[ITER {}] Saving Checkpoint".format(iteration))
@@ -356,8 +414,8 @@ if __name__ == "__main__":
     parser.add_argument('--debug_from', type=int, default=-1)
     parser.add_argument('--detect_anomaly', action='store_true', default=False)
     parser.add_argument('--stage', type=int, default=None, help='Second stage of the optimisation')
-    parser.add_argument("--test_iterations", nargs="+", type=int, default=[7_000, 12_000, 15_000])
-    parser.add_argument("--save_iterations", nargs="+", type=int, default=[7_000, 12_000, 15_000])
+    parser.add_argument("--test_iterations", nargs="+", type=int, default=[1000 * (i + 1) for i in range(30)])
+    parser.add_argument("--save_iterations", nargs="+", type=int, default=[1000 * (i + 1) for i in range(30)])
     parser.add_argument("--quiet", action="store_true")
     parser.add_argument("--checkpoint_iterations", nargs="+", type=int, default=[])
     parser.add_argument("--start_checkpoint", type=str, default = None)
