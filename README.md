@@ -1,5 +1,9 @@
 # SWAGSplatting: Semantic-guided Water-scene Augmented Gaussian Splatting
 
+[![arXiv](https://img.shields.io/badge/arXiv-2509.00800-B31B1B.svg?logo=arxiv)](https://arxiv.org/pdf/2509.00800)
+> ⚠️ **Note:** The latest version is currently under arXiv review.
+📄 [**Paper (latest version)**](image/SWAGSplatting.pdf)
+
 ![SWAGSplatting Overview](image/workflow_uw.png)
 
 
