@@ -1,6 +1,7 @@
 # SWAGSplatting: Semantic-guided Water-scene Augmented Gaussian Splatting
 
 [![arXiv](https://img.shields.io/badge/arXiv-2509.00800-B31B1B.svg?logo=arxiv)](https://arxiv.org/pdf/2509.00800)
+[![License](https://img.shields.io/badge/License-Research%20Only-orange)](LICENSE.md)
 
 ![SWAGSplatting Overview](image/workflow_uw.png)
 
@@ -57,3 +58,7 @@ Please refer to the documentation `README.md` from the [3D Gaussian Splatting re
 - **Purpose**: Set the number of iterations when the second stage of optimization should begin.
 - **Type**: int (e.g., 12000 as recommended)
 - **Default**: None
+
+## 5. License
+
+This project is based on the original Gaussian-Splatting implementation. It remains under the Gaussian-Splatting License (research use only). See the [LICENSE](LICENSE.md) file for details.
