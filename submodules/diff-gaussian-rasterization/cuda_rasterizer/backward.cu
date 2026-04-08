@@ -439,7 +439,8 @@ renderCUDA(
 	float* __restrict__ dL_dopacity,
 	float* __restrict__ dL_dcolors,
 	float* __restrict__ dL_dcolors_clean,
-	float* __restrict__ dL_ddepths
+	float* __restrict__ dL_ddepths,
+	float* __restrict__ dL_dG2
 )
 {
 	// We rasterize again. Compute necessary block info.
@@ -624,6 +625,8 @@ renderCUDA(
 
 			// Update gradients w.r.t. opacity of the Gaussian
 			atomicAdd(&(dL_dopacity[global_id]), G * dL_dopa);
+
+			atomicAdd(&(dL_dG2[global_id]), dL_dG * dL_dG);
 		}
 	}
 }
@@ -723,7 +726,8 @@ void BACKWARD::render(
 	float* dL_dopacity,
 	float* dL_dcolors,
 	float* dL_dcolors_clean,
-	float* dL_ddepths)
+	float* dL_ddepths,
+	float* dL_dG2)
 {
 	renderCUDA<NUM_CHANNELS> << <grid, block >> >(
 		ranges,
@@ -747,6 +751,7 @@ void BACKWARD::render(
 		dL_dopacity,
 		dL_dcolors,
 		dL_dcolors_clean,
-		dL_ddepths
+		dL_ddepths,
+		dL_dG2
 		);
 }

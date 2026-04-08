@@ -30,6 +30,7 @@ def rasterize_gaussians(
     rotations,
     cov3Ds_precomp,
     factor,
+    scores,
     raster_settings,
 ):
     return _RasterizeGaussians.apply(
@@ -43,6 +44,7 @@ def rasterize_gaussians(
         rotations,
         cov3Ds_precomp,
         factor,
+        scores,
         raster_settings,
     )
 
@@ -60,6 +62,7 @@ class _RasterizeGaussians(torch.autograd.Function):
         rotations,
         cov3Ds_precomp,
         factor,
+        scores,
         raster_settings,
     ):
 
@@ -145,16 +148,15 @@ class _RasterizeGaussians(torch.autograd.Function):
         if raster_settings.debug:
             cpu_args = cpu_deep_copy_tuple(args) # Copy them before they can be corrupted
             try:
-                grad_means2D_rgb, grad_means2D, grad_colors_precomp, grad_colors_precomp_clean, grad_opacities, grad_means3D, grad_cov3Ds_precomp, grad_sh, grad_scales, grad_rotations, depth = _C.rasterize_gaussians_backward(*args)
+                grad_means2D_rgb, grad_means2D, grad_colors_precomp, grad_colors_precomp_clean, grad_opacities, grad_means3D, grad_cov3Ds_precomp, grad_sh, grad_scales, grad_rotations, depth, grad_gaussians2 = _C.rasterize_gaussians_backward(*args)
             except Exception as ex:
                 torch.save(cpu_args, "snapshot_bw.dump")
                 print("\nAn error occured in backward. Writing snapshot_bw.dump for debugging.\n")
                 raise ex
         else:
-             grad_means2D_rgb, grad_means2D, grad_colors_precomp, grad_colors_precomp_clean, grad_opacities, grad_means3D, grad_cov3Ds_precomp, grad_sh, grad_scales, grad_rotations, depth= _C.rasterize_gaussians_backward(*args)
+             grad_means2D_rgb, grad_means2D, grad_colors_precomp, grad_colors_precomp_clean, grad_opacities, grad_means3D, grad_cov3Ds_precomp, grad_sh, grad_scales, grad_rotations, depth, grad_gaussians2= _C.rasterize_gaussians_backward(*args)
 
-        scaling_factor = torch.minimum(torch.ones_like(depth), (depth / raster_settings.depth_threshold) ** 2)
-        factor = torch.clamp(factor, 0.1, 1.0)
+        factor = torch.clamp(factor, 0.5, 1.0)
         amplifier_factor = 1.0 / torch.mean(factor, dim=1, keepdim=True)
         amplifier_factor = amplifier_factor.detach()
         def scale_tensor(tensor, scaling_factor):
@@ -177,7 +179,8 @@ class _RasterizeGaussians(torch.autograd.Function):
             grad_rotations,
             grad_cov3Ds_precomp,
             None,
-            None,
+            grad_gaussians2,
+            None
         )
 
         return grads
@@ -213,7 +216,7 @@ class GaussianRasterizer(nn.Module):
             
         return visible
 
-    def forward(self, means3D, means2D, opacities, shs = None, colors_precomp = None, colors_precomp_clean = None, scales = None, rotations = None, cov3D_precomp = None, factor = None):
+    def forward(self, means3D, means2D, opacities, scores, shs = None, colors_precomp = None, colors_precomp_clean = None, scales = None, rotations = None, cov3D_precomp = None, factor = None):
         
         raster_settings = self.raster_settings
 
@@ -251,6 +254,7 @@ class GaussianRasterizer(nn.Module):
             rotations,
             cov3D_precomp,
             factor,
+            scores,
             raster_settings, 
         )
 
