@@ -29,3 +29,5 @@ dependencies:
   - torchaudio=0.12.1
   - pip:
     - submodules/diff-gaussian-rasterization
+    - submodules/diff-gaussian-rasterization_or
+    - submodules/simple-knn

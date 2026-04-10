@@ -304,7 +304,7 @@ class GaussianModel:
         self._scaling = nn.Parameter(torch.tensor(scales, dtype=torch.float, device="cuda").requires_grad_(True))
         self._rotation = nn.Parameter(torch.tensor(rots, dtype=torch.float, device="cuda").requires_grad_(True))
         self.active_sh_degree = self.max_sh_degree
-        torch.nn.ModuleList([self.mlp_head]).load_state_dict(torch.load(path + ".pth"))
+        torch.nn.ModuleList([self.mlp_head]).load_state_dict(torch.load(path + ".pth", weights_only=True))
 
     def replace_tensor_to_optimizer(self, tensor, name):
         optimizable_tensors = {}
